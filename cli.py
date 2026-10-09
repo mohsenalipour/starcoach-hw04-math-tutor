@@ -10,6 +10,7 @@ from pathlib import Path
 from agent import MAX_QUESTION_LENGTH, MathTutorAgent, TutorSession
 from provider import LLMProvider, TutorError, load_settings
 from report import write_html_report
+from terminal import TerminalUI
 
 HELP = """Commands:
   /help                         Show this help
@@ -85,14 +86,13 @@ def save_state(session: TutorSession, path: Path) -> None:
         raise TutorError("Cannot write the state file. Check the path and permissions.") from None
 
 
-def show_result(state: dict, *, as_json: bool, trace: bool) -> None:
+def show_result(state: dict, *, as_json: bool, trace: bool, ui: TerminalUI) -> None:
     if as_json:
         print(json.dumps(state, ensure_ascii=False, indent=2))
     else:
-        print("\n" + state["final_answer"] + "\n")
+        ui.answer(state)
     if trace:
-        print("Route: " + " -> ".join(event["node"] for event in state["trace"]), file=sys.stderr)
-        print(f"Status: {state['status']} | Verification: {state['verification']}", file=sys.stderr)
+        ui.trace(state, stderr=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -114,10 +114,12 @@ def main(argv: list[str] | None = None) -> int:
 
     provider = None
     trace_enabled = args.trace
+    ui = TerminalUI()
 
     def progress(name: str) -> None:
         if trace_enabled:
-            print(f"[node] {name}", file=sys.stderr, flush=True)
+            ui.message(f"[node] {name}", "assistant", stderr=True)
+            ui.errors.flush()
 
     try:
         if args.input_file:
@@ -127,26 +129,28 @@ def main(argv: list[str] | None = None) -> int:
         provider = LLMProvider(load_settings(args.env_file))
         agent = MathTutorAgent(provider, on_node=progress)
         session = TutorSession(agent, level=args.level, language=args.language)
-        def respond(text: str, *, as_json: bool = False) -> dict:
+        def respond(text: str, *, as_json: bool = False, echo_question: bool = False) -> dict:
+            if echo_question and not as_json:
+                ui.question(text)
             state = session.send(text)
             if args.state_file:
                 save_state(session, args.state_file)
-            show_result(state, as_json=as_json, trace=trace_enabled)
+            show_result(state, as_json=as_json, trace=trace_enabled, ui=ui)
             if args.html:
                 write_html_report(state, args.html)
-                print("Report: " + str(args.html.resolve()), file=sys.stderr)
+                ui.message("Report: " + str(args.html.resolve()), "success", stderr=True)
             return state
 
         if question:
-            state = respond(question, as_json=args.json)
+            state = respond(question, as_json=args.json, echo_question=True)
             return 2 if state["status"] == "unverified" else 0
 
-        print("MILO -- Mathematics Tutor\nEnglish / Persian | /help: commands | /exit: quit\n")
+        ui.welcome()
         while True:
             try:
-                text = input("You> ").strip()
+                text = ui.read_question()
             except (EOFError, KeyboardInterrupt):
-                print("\nGoodbye.")
+                ui.message("\nGoodbye.")
                 return 0
             if not text:
                 continue
@@ -155,46 +159,45 @@ def main(argv: list[str] | None = None) -> int:
                     command, _, value = text.partition(" ")
                     value = value.strip()
                     if command in {"/exit", "/quit"}:
-                        print("Goodbye.")
+                        ui.message("Goodbye.")
                         return 0
                     if command == "/help":
-                        print(HELP)
+                        ui.message(HELP, "heading")
                     elif command == "/level":
                         if value not in {"auto", "beginner", "intermediate", "advanced"}:
                             raise TutorError("Use /level auto|beginner|intermediate|advanced.")
                         session.level = value
-                        print("Level: " + value)
+                        ui.message("Level: " + value, "success")
                     elif command == "/language":
                         if value not in {"auto", "fa", "en"}:
                             raise TutorError("Use /language auto|fa|en.")
                         session.language = value
-                        print("Language: " + value)
+                        ui.message("Language: " + value, "success")
                     elif command == "/new":
                         session.clear()
-                        print("A new conversation is ready.")
+                        ui.message("A new conversation is ready.", "success")
                     elif command == "/state":
                         print(json.dumps(session.last_state, ensure_ascii=False, indent=2))
                     elif command == "/trace":
                         if value in {"on", "off"}:
                             trace_enabled = value == "on"
-                            print("Live trace: " + value)
+                            ui.message("Live trace: " + value, "success")
                         elif value:
                             raise TutorError("Use /trace, /trace on, or /trace off.")
                         elif session.last_state:
-                            print(" -> ".join(event["node"] for event in session.last_state["trace"]))
-                            print("Verification: " + session.last_state["verification"])
+                            ui.trace(session.last_state)
                         else:
-                            print("No completed turn yet.")
+                            ui.message("No completed turn yet.", "heading")
                     elif command == "/save":
                         if not value:
                             raise TutorError("Use /save filename.json.")
                         path = Path(value.strip('"'))
                         save_state(session, path)
-                        print("Saved: " + str(path.resolve()))
+                        ui.message("Saved: " + str(path.resolve()), "success")
                     elif command == "/file":
                         if not value:
                             raise TutorError("Use /file question.txt.")
-                        respond(read_question_file(Path(value.strip('"'))))
+                        respond(read_question_file(Path(value.strip('"'))), echo_question=True)
                     elif command == "/html":
                         if not value:
                             raise TutorError("Use /html report.html.")
@@ -202,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
                             raise TutorError("Ask a question before exporting a report.")
                         path = Path(value.strip('"'))
                         write_html_report(session.last_state, path)
-                        print("Report: " + str(path.resolve()))
+                        ui.message("Report: " + str(path.resolve()), "success")
                     elif command == "/graph":
                         print(agent.mermaid())
                     else:
@@ -210,14 +213,14 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 respond(text)
             except TutorError as error:
-                print("Error: " + str(error), file=sys.stderr)
+                ui.message("Error: " + str(error), "error", stderr=True)
             except KeyboardInterrupt:
-                print("\nRequest cancelled. You can ask again.")
+                ui.message("\nRequest cancelled. You can ask again.", "heading")
     except TutorError as error:
-        print("Error: " + str(error), file=sys.stderr)
+        ui.message("Error: " + str(error), "error", stderr=True)
         return 1
     except KeyboardInterrupt:
-        print("\nCancelled.", file=sys.stderr)
+        ui.message("\nCancelled.", "heading", stderr=True)
         return 130
     finally:
         if provider:

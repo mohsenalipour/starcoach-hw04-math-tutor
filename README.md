@@ -20,6 +20,8 @@ cd starcoach-hw04-math-tutor
 
 با وارد کردن سؤال گفت‌وگو شروع می‌شود. مثال:
 
+رنگ‌ها در ترمینال به‌صورت خودکار فعال‌اند؛ سؤال آبی، پاسخ سبز، عنوان‌ها بنفش، جواب نهایی پررنگ و زیرخط‌دار، مثال‌ها و نکته‌ها زرد و خطاها قرمز هستند. شمارهٔ مراحل نیز رنگ متفاوت دارد. اجرای بدون آرگومان کافی است و نصب بستهٔ اضافی لازم نیست. هنگام ذخیرهٔ State یا خروجی `--json`، متن داده‌ها رنگ ندارد؛ خروجی هدایت‌شده به فایل نیز رنگی نمی‌شود.
+
 ```text
 You> مشتق را مثل یک معلم برای کسی که حسابان بلد نیست توضیح بده
 You> حالا مشتق x^3 + 2*x را مرحله‌به‌مرحله حساب کن
@@ -100,6 +102,7 @@ python -m venv .venv
 MATH_TUTOR/
 ├── agent.py             # State، نودها، Graph، شرط‌ها و حافظهٔ گفت‌وگو
 ├── cli.py               # ورودی/خروجی ترمینال و فرمان‌ها
+├── terminal.py          # رنگ و قالب‌بندی خودکار نمایش ترمینال
 ├── provider.py          # تنظیمات و پاسخ ساختاریافتهٔ مدل
 ├── math_tools.py        # بررسی محدود و مستقل محاسبات با SymPy
 ├── report.py            # گزارش HTML خوانا برای فارسی و فرمول‌ها
@@ -141,3 +144,4 @@ MATH_TUTOR/
 - [OpenAI Python SDK](https://github.com/openai/openai-python)
 - [SymPy Calculus](https://docs.sympy.org/latest/tutorials/intro-tutorial/calculus.html)
 - [AvalAI Docs](https://docs.avalai.ir/)
+- [Windows Console: رنگ و قالب‌بندی ANSI](https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences)
