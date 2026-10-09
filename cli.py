@@ -7,8 +7,9 @@ import json
 import sys
 from pathlib import Path
 
-from agent import MathTutorAgent, TutorSession
+from agent import MAX_QUESTION_LENGTH, MathTutorAgent, TutorSession
 from provider import LLMProvider, TutorError, load_settings
+from report import write_html_report
 
 HELP = """Commands:
   /help                         Show this help
@@ -17,14 +18,17 @@ HELP = """Commands:
   /trace [on|off]                Show the last route, or toggle live node progress
   /state                        Show the last turn's complete JSON state
   /save filename.json           Save the last state (contains no API key)
+  /file question.txt            Read a UTF-8 question file and send it in this conversation
+  /html report.html             Export the last answer as a readable HTML report
   /graph                        Show the actual graph in Mermaid notation
   /new                          Start a fresh conversation; keep level/language
   /exit                         Quit (Ctrl+D/EOF also quits)
 
 Examples:
-  مشتق را با یک مثال ساده توضیح بده
-  مشتق x^3 + 2*x را نسبت به x حساب کن
+  Explain derivatives to a beginner using an everyday example
+  Differentiate x^3 + 2*x with respect to x, step by step
   Solve 2*x + 3 = 7 step by step
+  /file demo/problem-fa.txt
 """
 
 
@@ -42,15 +46,34 @@ def utf8_terminal() -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MILO — Complex Mathematics Tutor (CLI)")
     parser.add_argument("question", nargs="*", help="One question; omit for an interactive conversation")
-    parser.add_argument("-q", "--question", dest="single_question", help="One question, enclosed in quotes")
+    input_group = parser.add_mutually_exclusive_group()
+    input_group.add_argument("-q", "--question", dest="single_question", help="One question, enclosed in quotes")
+    input_group.add_argument("--input-file", type=Path, help="Read one UTF-8 question from a file (supports a BOM)")
     parser.add_argument("--level", choices=["auto", "beginner", "intermediate", "advanced"], default="auto")
     parser.add_argument("--language", choices=["auto", "fa", "en"], default="auto")
     parser.add_argument("--trace", action="store_true", help="Print node progress and verification to stderr")
     parser.add_argument("--json", action="store_true", help="Output full state as JSON (single-question mode)")
     parser.add_argument("--state-file", type=Path, help="Save the last turn's state to a .json file")
+    parser.add_argument("--html", type=Path, help="Export the answer to a read-only RTL/LTR .html report")
     parser.add_argument("--env-file", type=Path, help="Read settings from this .env file")
     parser.add_argument("--graph", action="store_true", help="Print the graph and exit; no API key required")
     return parser
+
+
+def read_question_file(path: Path) -> str:
+    try:
+        with path.open("rb") as stream:
+            data = stream.read(65537)
+        if len(data) > 65536:
+            raise TutorError("The question file is too large (maximum 64 KiB).")
+        text = data.decode("utf-8-sig").strip()
+    except UnicodeDecodeError:
+        raise TutorError("Save the question file as UTF-8 in your text editor.") from None
+    except OSError:
+        raise TutorError("Cannot read the question file. Check its path and permissions.") from None
+    if not text or len(text) > MAX_QUESTION_LENGTH:
+        raise TutorError(f"The file must contain 1 to {MAX_QUESTION_LENGTH} characters.")
+    return text
 
 
 def save_state(session: TutorSession, path: Path) -> None:
@@ -76,16 +99,18 @@ def main(argv: list[str] | None = None) -> int:
     utf8_terminal()
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.single_question is not None and args.question:
-        parser.error("Use either a positional question or --question.")
+    if (args.single_question is not None or args.input_file) and args.question:
+        parser.error("Use one question source: positional text, --question, or --input-file.")
     question = args.single_question if args.single_question is not None else " ".join(args.question)
     if args.graph:
         print(MathTutorAgent(GraphOnlyProvider()).mermaid())
         return 0
-    if args.json and not question:
+    if args.json and not (question or args.input_file):
         parser.error("--json requires a question.")
     if args.state_file and args.state_file.suffix.lower() != ".json":
         parser.error("--state-file must have a .json extension.")
+    if args.html and args.html.suffix.lower() not in {".html", ".htm"}:
+        parser.error("--html must have a .html or .htm extension.")
 
     provider = None
     trace_enabled = args.trace
@@ -95,17 +120,28 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[node] {name}", file=sys.stderr, flush=True)
 
     try:
+        if args.input_file:
+            question = read_question_file(args.input_file)
+        if args.single_question is not None and not question.strip():
+            raise TutorError("The question cannot be empty.")
         provider = LLMProvider(load_settings(args.env_file))
         agent = MathTutorAgent(provider, on_node=progress)
         session = TutorSession(agent, level=args.level, language=args.language)
-        if question:
-            state = session.send(question)
+        def respond(text: str, *, as_json: bool = False) -> dict:
+            state = session.send(text)
             if args.state_file:
                 save_state(session, args.state_file)
-            show_result(state, as_json=args.json, trace=trace_enabled)
+            show_result(state, as_json=as_json, trace=trace_enabled)
+            if args.html:
+                write_html_report(state, args.html)
+                print("Report: " + str(args.html.resolve()), file=sys.stderr)
+            return state
+
+        if question:
+            state = respond(question, as_json=args.json)
             return 2 if state["status"] == "unverified" else 0
 
-        print("MILO — Mathematics Tutor\nفارسی / English | /help: راهنما | /exit: خروج\n")
+        print("MILO -- Mathematics Tutor\nEnglish / Persian | /help: commands | /exit: quit\n")
         while True:
             try:
                 text = input("You> ").strip()
@@ -155,15 +191,24 @@ def main(argv: list[str] | None = None) -> int:
                         path = Path(value.strip('"'))
                         save_state(session, path)
                         print("Saved: " + str(path.resolve()))
+                    elif command == "/file":
+                        if not value:
+                            raise TutorError("Use /file question.txt.")
+                        respond(read_question_file(Path(value.strip('"'))))
+                    elif command == "/html":
+                        if not value:
+                            raise TutorError("Use /html report.html.")
+                        if session.last_state is None:
+                            raise TutorError("Ask a question before exporting a report.")
+                        path = Path(value.strip('"'))
+                        write_html_report(session.last_state, path)
+                        print("Report: " + str(path.resolve()))
                     elif command == "/graph":
                         print(agent.mermaid())
                     else:
                         raise TutorError("Unknown command. Type /help.")
                     continue
-                state = session.send(text)
-                if args.state_file:
-                    save_state(session, args.state_file)
-                show_result(state, as_json=False, trace=trace_enabled)
+                respond(text)
             except TutorError as error:
                 print("Error: " + str(error), file=sys.stderr)
             except KeyboardInterrupt:

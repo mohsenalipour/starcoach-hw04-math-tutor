@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from cli import main
 from math_tools import ToolRequest, calculate, parse_expression, run_calculation
 from provider import LLMProvider, Settings, TutorError
+from report import write_html_report
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -327,6 +328,66 @@ class CLITests(unittest.TestCase):
             self.assertEqual(json.loads(out.getvalue())["status"], "answered")
             self.assertTrue(path.exists())
 
+    def test_utf8_bom_file_preserves_persian_and_exports_html_with_json(self):
+        question = "مشتق چیست؟"
+        provider = concept_provider()
+        with workspace_temp() as folder:
+            root = Path(folder)
+            question_file = root / "question.txt"
+            report_file = root / "report.html"
+            question_file.write_text(question, encoding="utf-8-sig")
+            with patch("cli.load_settings"), patch("cli.LLMProvider", return_value=provider), \
+                    redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+                code = main(["--input-file", str(question_file), "--json", "--html", str(report_file)])
+            self.assertEqual(code, 0)
+            state = json.loads(out.getvalue())
+            self.assertEqual(state["raw_request"], question)
+            self.assertEqual(state["language"], "fa")
+            self.assertEqual(provider.calls[0][1]["question"], question)
+            self.assertIn('lang="fa" dir="rtl"', report_file.read_text(encoding="utf-8"))
+            self.assertIn("Report:", err.getvalue())
+
+    def test_bad_question_files_fail_before_loading_api_settings(self):
+        with workspace_temp() as folder:
+            root = Path(folder)
+            cases = {"invalid.txt": b"\xff", "empty.txt": b" \n", "long.txt": b"x" * 4001,
+                     "large.txt": b"x" * 65537}
+            for name, data in cases.items():
+                (root / name).write_bytes(data)
+            for name in [*cases, "missing.txt"]:
+                with self.subTest(file=name), patch("cli.load_settings") as settings, \
+                        redirect_stderr(io.StringIO()) as err:
+                    self.assertEqual(main(["--input-file", str(root / name)]), 1)
+                    settings.assert_not_called()
+                    self.assertIn("Error:", err.getvalue())
+                    self.assertNotIn("Traceback", err.getvalue())
+
+    def test_interactive_file_clarification_preserves_context_and_exports_last_turn(self):
+        provider = ScriptedProvider({
+            "analyze_request": [analysis("problem", needs_clarification=True,
+                clarification_question="Which equation?", normalized_question="Solve the equation"),
+                analysis("problem", normalized_question="Solve 2*x + 3 = 7",
+                         tool_request=ToolRequest(operation="solve", expression="2*x + 3 = 7").model_dump())],
+            "plan_lesson": [PLAN], "solve_problem": [answer("2")], "review_answer": [PASS],
+        })
+        with workspace_temp() as folder:
+            root = Path(folder)
+            question = root / "question.txt"
+            equation = root / "equation.txt"
+            report = root / "last.html"
+            question.write_text("این معادله را حل کن.", encoding="utf-8")
+            equation.write_text("2*x + 3 = 7", encoding="utf-8")
+            inputs = iter([f'/file "{question}"', f'/file "{equation}"', f'/html "{report}"', "/exit"])
+            with patch("cli.load_settings"), patch("cli.LLMProvider", return_value=provider), \
+                    patch("builtins.input", side_effect=lambda _: next(inputs)), \
+                    redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(main(["--language", "fa"]), 0)
+            self.assertIn("Which equation?", out.getvalue())
+            self.assertEqual(provider.calls[0][1]["question"], "این معادله را حل کن.")
+            self.assertIn("Solve the equation", provider.calls[1][1]["question"])
+            self.assertIn("2*x + 3 = 7", provider.calls[1][1]["question"])
+            self.assertIn("symbolically_checked", report.read_text(encoding="utf-8"))
+
     def test_interactive_commands_and_followup(self):
         provider = concept_provider()
         inputs = iter(["", "/level advanced", "/language en", "Explain derivatives", "/trace", "/new", "/exit"])
@@ -345,6 +406,32 @@ class CLITests(unittest.TestCase):
         self.assertIn("Missing API settings", err.getvalue())
         self.assertNotIn("Traceback", err.getvalue())
 
+
+class ReportTests(unittest.TestCase):
+    def test_persian_report_escapes_user_and_model_markup_and_isolates_formulas(self):
+        state = MathTutorAgent(concept_provider()).run("مشتق چیست؟", language="fa")
+        state["raw_request"] = '<script>alert("question")</script>'
+        state["final_answer"] = '<img src=x onerror="alert(1)">\nاین x یک متغیر است.\nپاسخ: 3*x^2 + 2'
+        with workspace_temp() as folder:
+            path = Path(folder) / "answer.html"
+            write_html_report(state, path)
+            markup = path.read_text(encoding="utf-8")
+        self.assertIn('lang="fa" dir="rtl"', markup)
+        self.assertIn('<bdi dir="ltr">3*x^2 + 2</bdi>', markup)
+        self.assertIn('<bdi dir="ltr">x</bdi> یک', markup)
+        self.assertNotIn("<script", markup)
+        self.assertNotIn("<img", markup)
+        self.assertIn("&lt;script&gt;", markup)
+        self.assertIn("explain_concept", markup)
+
+    def test_english_report_uses_ltr_and_reports_output_errors_without_a_traceback(self):
+        state = MathTutorAgent(concept_provider()).run("Explain derivatives", language="en")
+        with workspace_temp() as folder:
+            path = Path(folder) / "answer.html"
+            write_html_report(state, path)
+            self.assertIn('lang="en" dir="ltr"', path.read_text(encoding="utf-8"))
+            with self.assertRaisesRegex(TutorError, "output folder"):
+                write_html_report(state, Path(folder) / "missing-folder" / "answer.html")
 
 if __name__ == "__main__":
     unittest.main()
