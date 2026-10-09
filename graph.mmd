@@ -1,0 +1,38 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	analyze_request(analyze_request)
+	ask_clarification(ask_clarification)
+	assess_level(assess_level)
+	plan_lesson(plan_lesson)
+	explain_concept(explain_concept)
+	solve_problem(solve_problem)
+	calculate(calculate)
+	review_answer(review_answer)
+	revise_answer(revise_answer)
+	finalize(finalize)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> analyze_request;
+	analyze_request -. &nbsp;clarify&nbsp; .-> ask_clarification;
+	analyze_request -. &nbsp;teach&nbsp; .-> assess_level;
+	analyze_request -. &nbsp;finish&nbsp; .-> finalize;
+	ask_clarification --> finalize;
+	assess_level --> plan_lesson;
+	calculate --> review_answer;
+	explain_concept --> review_answer;
+	plan_lesson -. &nbsp;concept&nbsp; .-> explain_concept;
+	plan_lesson -. &nbsp;problem&nbsp; .-> solve_problem;
+	review_answer -. &nbsp;clarify&nbsp; .-> ask_clarification;
+	review_answer -. &nbsp;finish&nbsp; .-> finalize;
+	review_answer -. &nbsp;revise&nbsp; .-> revise_answer;
+	revise_answer -. &nbsp;problem&nbsp; .-> calculate;
+	revise_answer -. &nbsp;concept&nbsp; .-> review_answer;
+	solve_problem --> calculate;
+	finalize --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

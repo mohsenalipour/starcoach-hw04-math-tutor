@@ -1,0 +1,52 @@
+{
+  "raw_request": "این معادله را حل کن.",
+  "question": "این معادله را حل کن.",
+  "history": [],
+  "level_choice": "auto",
+  "previous_level": "",
+  "language": "fa",
+  "analysis": {
+    "request_kind": "problem",
+    "topic": "حل معادلات",
+    "normalized_question": "این معادله را حل کن.",
+    "learner_level": "beginner",
+    "needs_clarification": true,
+    "clarification_question": "لطفاً معادله‌ای که می‌خواهید حل کنیم را مشخص کنید.",
+    "tool_request": null
+  },
+  "learner_level": "beginner",
+  "plan": {},
+  "draft": {},
+  "tool_result": {},
+  "review": {},
+  "revision_count": 0,
+  "final_answer": "لطفاً معادله‌ای که می‌خواهید حل کنیم را مشخص کنید.",
+  "status": "needs_clarification",
+  "verification": "not_applicable",
+  "trace": [
+    {
+      "node": "analyze_request",
+      "updated_fields": [
+        "analysis",
+        "question"
+      ],
+      "elapsed_ms": 13823
+    },
+    {
+      "node": "ask_clarification",
+      "updated_fields": [
+        "final_answer",
+        "status",
+        "verification"
+      ],
+      "elapsed_ms": 0
+    },
+    {
+      "node": "finalize",
+      "updated_fields": [
+        "final_answer"
+      ],
+      "elapsed_ms": 0
+    }
+  ]
+}
